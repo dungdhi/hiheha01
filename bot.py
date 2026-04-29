@@ -23,7 +23,7 @@ def get_fb_images(url):
     posts = list(fs.get_posts(
         post_urls=[url],
         cookies=COOKIE_FILE,
-        options={"allow_extra_requests": False}
+        options={"allow_extra_requests": True}
     ))
     if not posts:
         return []
