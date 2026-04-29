@@ -1,82 +1,46 @@
-import os, re, asyncio
+import os, re
 from playwright.async_api import async_playwright
-from telegram import Update
+from telegram import Update, InputMediaPhoto
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-TARGET_CHAT_RAW = os.getenv("TARGET_CHAT_ID")
-TARGET_THREAD_RAW = os.getenv("TARGET_THREAD_ID")
-FB_COOKIE = os.getenv("FB_COOKIE", "")
+TARGET_CHAT = int(os.getenv("TARGET_CHAT_ID","0"))
+TARGET_THREAD = int(os.getenv("TARGET_THREAD_ID")) if os.getenv("TARGET_THREAD_ID") else None
+FB_COOKIE = os.getenv("FB_COOKIE","")
 
-print(f"ENV CHECK: BOT_TOKEN set={bool(BOT_TOKEN)}, TARGET_CHAT_ID={TARGET_CHAT_RAW}, TARGET_THREAD_ID={TARGET_THREAD_RAW}")
+def parse_cookie(s):
+    return [{"name":n,"value":v,"domain":".facebook.com","path":"/"}
+            for n,v in (p.split("=",1) for p in s.split(";") if "=" in p)]
 
-try:
-    TARGET_CHAT = int(TARGET_CHAT_RAW.strip()) if TARGET_CHAT_RAW else 0
-except Exception as e:
-    print(f"ERROR parsing TARGET_CHAT_ID: {e}")
-    TARGET_CHAT = 0
-
-try:
-    TARGET_THREAD = int(TARGET_THREAD_RAW.strip()) if TARGET_THREAD_RAW and TARGET_THREAD_RAW.strip() not in ("0","") else None
-except:
-    TARGET_THREAD = None
-
-def parse_cookie(cookie_str):
-    cookies = []
-    for part in cookie_str.split(";"):
-        if "=" in part:
-            name, value = part.strip().split("=", 1)
-            cookies.append({"name": name, "value": value, "domain": ".facebook.com", "path": "/"})
-    return cookies
-
-async def get_fb_images(url):
+async def get_imgs(url):
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
-        context = await browser.new_context()
-        if FB_COOKIE:
-            await context.add_cookies(parse_cookie(FB_COOKIE))
-        page = await context.new_page()
-        await page.goto(url, wait_until="networkidle", timeout=60000)
-        for _ in range(3):
-            try:
-                await page.click("text=Xem thêm", timeout=2000)
-            except:
-                break
-        imgs = await page.eval_on_selector_all("img[src*='scontent']", "els => els.map(e => e.src.split('?')[0])")
-        imgs = [i for i in imgs if "fbcdn.net" in i and "emoji" not in i and "profile" not in i]
-        seen = set(); out = []
-        for i in imgs:
-            if i not in seen:
-                out.append(i); seen.add(i)
-        await browser.close()
-        return out[:50]
+        b = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+        ctx = await b.new_context()
+        if FB_COOKIE: await ctx.add_cookies(parse_cookie(FB_COOKIE))
+        pg = await ctx.new_page()
+        await pg.goto(url, timeout=60000)
+        await pg.wait_for_timeout(5000)
+        imgs = await pg.eval_on_selector_all("img[src*='scontent']", "els=>els.map(e=>e.src.split('?')[0])")
+        await b.close()
+        return list(dict.fromkeys([i for i in imgs if "fbcdn" in i]))[:50]
 
-async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    m = re.search(r'https?://\S+facebook\.com/\S+', update.message.text or '')
-    if not m:
-        return
+async def h(update,context):
+    import re
+    m=re.search(r'https?://\S+facebook\.com/\S+', update.message.text or '')
+    if not m: return
     await update.message.reply_text("Dang lay anh, cho 30s...")
-    try:
-        images = await get_fb_images(m.group(0))
-        if not images:
-            await update.message.reply_text("Khong tim thay anh - kiem tra cookie")
-            return
-        await update.message.reply_text(f"Tim thay {len(images)} anh")
-        for i in range(0, len(images), 10):
-            batch = images[i:i+10]
-            media = [{"type": "photo", "media": u} for u in batch]
-            if i == 0:
-                media[0]["caption"] = update.message.text[:900]
-            await context.bot.send_media_group(chat_id=TARGET_CHAT, message_thread_id=TARGET_THREAD, media=media)
-        await update.message.reply_text("Xong!")
-    except Exception as e:
-        await update.message.reply_text(f"Loi: {e}")
+    imgs=await get_imgs(m.group(0))
+    if not imgs:
+        await update.message.reply_text("Khong tim thay anh - lay cookie moi nhe")
+        return
+    await update.message.reply_text(f"Tim thay {len(imgs)} anh")
+    for i in range(0,len(imgs),10):
+        batch=imgs[i:i+10]
+        media=[InputMediaPhoto(u) for u in batch]
+        media[0].caption=update.message.text[:900]
+        await context.bot.send_media_group(TARGET_CHAT, media, message_thread_id=TARGET_THREAD)
 
-if not BOT_TOKEN or not TARGET_CHAT:
-    print("FATAL: Thieu BOT_TOKEN hoac TARGET_CHAT_ID - bot se khong chay")
-else:
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("Gui link FB")))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
-    if __name__ == "__main__":
-        app.run_polling()
+app=Application.builder().token(BOT_TOKEN).build()
+app.add_handler(CommandHandler("start",lambda u,c:u.message.reply_text("ok")))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, h))
+app.run_polling()
