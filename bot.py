@@ -10,31 +10,35 @@ FB_COOKIE = os.getenv("FB_COOKIE", "")
 
 def get_imgs(url):
     headers = {"User-Agent":"Mozilla/5.0","Cookie":FB_COOKIE}
+    # đổi domain đúng 1 lần
     for host in ["mbasic.facebook.com","m.facebook.com"]:
-        u = url.replace("www.facebook.com",host).replace("facebook.com",host)
-        r = requests.get(u, headers=headers, timeout=25)
-        if "scontent" in r.text:
-            imgs = re.findall(r"https://[^\"'\\s]+scontent[^\"'\\s]+\\.jpg", r.text)
-            imgs = [i.replace("&amp;","&") for i in imgs if "profile" not in i]
-            return list(dict.fromkeys(imgs))[:40]
-    # nếu không thấy, trả về lý do
-    raise Exception(f"FB tra ve {len(r.text)} ky tu, khong co scontent - cookie sai?")
+        u = re.sub(r"https://(www\.|m\.|mbasic\.)?facebook\.com", f"https://{host}", url)
+        r = requests.get(u, headers=headers, timeout=25, allow_redirects=True)
+        if r.status_code == 200 and "scontent" in r.text:
+            imgs = re.findall(r"https://[^\"'\s]+scontent[^\"'\s]+\.jpg", r.text)
+            imgs = [i.replace("&amp;","&") for i in imgs if "profile" not in i and "emoji" not in i]
+            uniq = []
+            [uniq.append(x) for x in imgs if x not in uniq]
+            return uniq[:40]
+    raise Exception("Khong tim thay scontent - cookie het han hoac bi chan IP")
 
-async def h(upd,ctx):
-    m = re.search(r'https?://\S*facebook\.com/\S+', upd.message.text or "")
+async def handle(update, context):
+    m = re.search(r"https?://\S*facebook\.com/\S+", update.message.text or "")
     if not m: return
-    await upd.message.reply_text("Dang lay anh...")
+    await update.message.reply_text("Dang lay anh...")
     try:
         imgs = get_imgs(m.group(0))
-        await upd.message.reply_text(f"Tim thay {len(imgs)} anh")
-        for i in range(0,len(imgs),10):
-            batch=[InputMediaPhoto(x) for x in imgs[i:i+10]]
-            batch[0].caption = upd.message.text[:900]
-            await ctx.bot.send_media_group(TARGET_CHAT,batch,message_thread_id=TARGET_THREAD)
+        await update.message.reply_text(f"Tim thay {len(imgs)} anh")
+        for i in range(0, len(imgs), 10):
+            batch = [InputMediaPhoto(x) for x in imgs[i:i+10]]
+            if i == 0:
+                batch[0].caption = update.message.text[:900]
+            await context.bot.send_media_group(TARGET_CHAT, batch, message_thread_id=TARGET_THREAD)
+        await update.message.reply_text("Xong!")
     except Exception as e:
-        await upd.message.reply_text(f"Loi: {e}")
+        await update.message.reply_text(f"Loi: {e}")
 
-app=Application.builder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start",lambda u,c:u.message.reply_text("ok")))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,h))
+app = Application.builder().token(BOT_TOKEN).build()
+app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("Gui link FB")))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 app.run_polling()
