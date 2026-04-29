@@ -30,19 +30,30 @@ def parse_cookies():
     return cookies
 
 async def get_images(url):
+    # dùng mbasic để tránh chặn
+    url = url.replace("www.facebook.com", "mbasic.facebook.com").replace("m.facebook.com", "mbasic.facebook.com")
     cookies = parse_cookies()
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context()
+        context = await browser.new_context(user_agent="Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36")
         if cookies:
             await context.add_cookies(cookies)
         page = await context.new_page()
-        await page.goto(url, timeout=60000, wait_until="domcontentloaded")
-        await page.wait_for_timeout(5000)
+        await page.goto(url, timeout=90000, wait_until="networkidle")
+        await page.wait_for_timeout(3000)
+        # scroll để load ảnh lười
+        for _ in range(3):
+            await page.mouse.wheel(0, 2000)
+            await page.wait_for_timeout(1000)
         imgs = await page.evaluate("""() => {
-            return Array.from(document.images)
-               .map(i => i.src)
-               .filter(s => s.includes('scontent') &&!s.includes('profile'));
+            const out = [];
+            document.querySelectorAll('img').forEach(i=>{
+                const s = i.src || '';
+                if(s.includes('scontent') &&!s.includes('profile') &&!s.includes('emoji')){
+                    out.push(s);
+                }
+            });
+            return out;
         }""")
         await browser.close()
     uniq = []
@@ -60,7 +71,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         imgs = await get_images(m.group(0))
         if not imgs:
-            await update.message.reply_text("Khong thay anh")
+            await update.message.reply_text("Khong thay anh - thu lai sau 10s hoac kiem tra cookie")
             return
         await update.message.reply_text(f"Tim thay {len(imgs)} anh")
         for i in range(0, len(imgs), 10):
@@ -71,11 +82,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     media.append(InputMediaPhoto(media=url, caption=update.message.text[:900]))
                 else:
                     media.append(InputMediaPhoto(media=url))
-            await context.bot.send_media_group(
-                chat_id=CHAT_ID,
-                media=media,
-                message_thread_id=THREAD_ID
-            )
+            await context.bot.send_media_group(chat_id=CHAT_ID, media=media, message_thread_id=THREAD_ID)
         await update.message.reply_text("Xong!")
     except Exception as e:
         await update.message.reply_text(f"Loi: {str(e)[:200]}")
