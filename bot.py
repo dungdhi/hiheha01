@@ -1,80 +1,81 @@
-import os, re
+import os, re, asyncio
 from telegram import Update, InputMediaPhoto
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import facebook_scraper as fs
+from playwright.async_api import async_playwright
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("TARGET_CHAT_ID", "0"))
 THREAD = os.getenv("TARGET_THREAD_ID")
 THREAD_ID = int(THREAD) if THREAD and THREAD.isdigit() else None
 FB_COOKIE = os.getenv("FB_COOKIE", "")
-COOKIE_FILE = "/tmp/fb_cookies.txt"
 
-# --- Ghi cookie đúng định dạng (nhận cả chuỗi Network lẫn file Netscape) ---
-def save_cookie():
-    content = FB_COOKIE.strip()
-    with open(COOKIE_FILE, "w", encoding="utf-8") as f:
-        if content.startswith("# Netscape") or "\tTRUE\t" in content:
-            # bạn dán nguyên file từ extension Get cookies.txt
-            f.write(content)
-        else:
-            # bạn dán chuỗi Cookie: c_user=...; xs=...
-            f.write("# Netscape HTTP Cookie File\n")
-            for part in content.split(";"):
-                if "=" not in part:
-                    continue
-                k, v = part.strip().split("=", 1)
-                f.write(f".facebook.com\tTRUE\t/\tTRUE\t2147483647\t{k}\t{v}\n")
+def parse_cookies():
+    cookies = []
+    # nhận cả định dạng Netscape từ extension
+    for line in FB_COOKIE.splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 7:
+            cookies.append({
+                "name": parts[5],
+                "value": parts[6],
+                "domain": ".facebook.com",
+                "path": "/"
+            })
+    # fallback nếu bạn dán dạng header
+    if not cookies and "=" in FB_COOKIE:
+        for part in FB_COOKIE.split(";"):
+            if "=" in part:
+                k,v = part.strip().split("=",1)
+                cookies.append({"name":k,"value":v,"domain":".facebook.com","path":"/"})
+    return cookies
 
-save_cookie()
-
-def get_fb_images(url):
-    posts = list(fs.get_posts(
-        post_urls=[url],
-        cookies=COOKIE_FILE,
-        options={"allow_extra_requests": True}
-    ))
-    if not posts:
-        return []
-    post = posts[0]
-    imgs = post.get("images") or []
-    if post.get("image"):
-        imgs = [post["image"]] + imgs
-    clean = []
+async def get_images(url):
+    cookies = parse_cookies()
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context()
+        if cookies:
+            await context.add_cookies(cookies)
+        page = await context.new_page()
+        await page.goto(url, timeout=60000, wait_until="domcontentloaded")
+        await page.wait_for_timeout(5000)
+        # lấy tất cả ảnh scontent
+        imgs = await page.evaluate("""() => {
+            return Array.from(document.images)
+               .map(i=>i.src)
+               .filter(s=>s.includes('scontent') &&!s.includes('profile'))
+        }""")
+        await browser.close()
+    # lọc trùng
+    uniq = []
     for u in imgs:
-        if "scontent" in u and "profile" not in u:
-            clean.append(u.split("?")[0])
-    # loại trùng, giữ thứ tự
-    return list(dict.fromkeys(clean))
+        u = u.split("?")[0]
+        if u not in uniq:
+            uniq.append(u)
+    return uniq
 
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     m = re.search(r"https?://\S*facebook\.com/\S+", update.message.text or "")
-    if not m:
-        return
+    if not m: return
     await update.message.reply_text("Dang lay anh...")
     try:
-        imgs = get_fb_images(m.group(0))
+        imgs = await get_images(m.group(0))
         if not imgs:
-            await update.message.reply_text("Khong lay duoc anh - cookie sai hoac bai viet rieng tu")
+            await update.message.reply_text("Khong thay anh - thu lai sau 5s")
             return
         await update.message.reply_text(f"Tim thay {len(imgs)} anh")
         for i in range(0, len(imgs), 10):
             batch = imgs[i:i+10]
             media = [InputMediaPhoto(u) for u in batch]
-            if i == 0:
-                media[0].caption = update.message.text[:900]
-            await context.bot.send_media_group(
-                CHAT_ID,
-                media,
-                message_thread_id=THREAD_ID
-            )
+            if i==0: media[0].caption = update.message.text[:900]
+            await context.bot.send_media_group(CHAT_ID, media, message_thread_id=THREAD_ID)
         await update.message.reply_text("Xong!")
     except Exception as e:
         await update.message.reply_text(f"Loi: {str(e)[:200]}")
 
 app = Application.builder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Gui link FB")))
+app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("Gui link FB")))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
-
-if __name__ == "__main__":
-    app.run_polling()
+app.run_polling()
