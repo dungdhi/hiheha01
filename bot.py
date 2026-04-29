@@ -8,64 +8,33 @@ THREAD_ID = os.getenv("TARGET_THREAD_ID")
 TARGET_THREAD = int(THREAD_ID) if THREAD_ID and THREAD_ID.isdigit() else None
 FB_COOKIE = os.getenv("FB_COOKIE", "")
 
-print(f"Bot starting - CHAT={TARGET_CHAT} THREAD={TARGET_THREAD}")
+def get_imgs(url):
+    headers = {"User-Agent":"Mozilla/5.0","Cookie":FB_COOKIE}
+    for host in ["mbasic.facebook.com","m.facebook.com"]:
+        u = url.replace("www.facebook.com",host).replace("facebook.com",host)
+        r = requests.get(u, headers=headers, timeout=25)
+        if "scontent" in r.text:
+            imgs = re.findall(r"https://[^\"'\\s]+scontent[^\"'\\s]+\\.jpg", r.text)
+            imgs = [i.replace("&amp;","&") for i in imgs if "profile" not in i]
+            return list(dict.fromkeys(imgs))[:40]
+    # nếu không thấy, trả về lý do
+    raise Exception(f"FB tra ve {len(r.text)} ky tu, khong co scontent - cookie sai?")
 
-def get_fb_images(url):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Cookie": FB_COOKIE,
-        "Accept-Language": "vi-VN,vi;q=0.9"
-    }
-    mbasic_url = url.replace("www.facebook.com", "mbasic.facebook.com")
-    if "/share/p/" in mbasic_url:
-        pid = mbasic_url.split("/share/p/")[1].split("/")[0]
-        mbasic_url = f"https://mbasic.facebook.com/story.php?story_fbid={pid}&id=0"
-
-    r = requests.get(mbasic_url, headers=headers, timeout=25)
-    r.raise_for_status()
-    pattern = r"https://[^\"'\\s]+scontent[^\"'\\s]+\\.jpg"
-    imgs = re.findall(pattern, r.text)
-    clean = []
-    seen = set()
-    for i in imgs:
-        i = i.replace("&amp;", "&")
-        if "profile" in i or "emoji" in i:
-            continue
-        if i not in seen:
-            clean.append(i)
-            seen.add(i)
-    return clean[:40]
-
-async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text or ""
-    m = re.search(r'https?://\S*facebook\.com/\S+', text)
-    if not m:
-        return
-    await update.message.reply_text("Dang lay anh...")
+async def h(upd,ctx):
+    m = re.search(r'https?://\S*facebook\.com/\S+', upd.message.text or "")
+    if not m: return
+    await upd.message.reply_text("Dang lay anh...")
     try:
-        imgs = get_fb_images(m.group(0))
-        if not imgs:
-            await update.message.reply_text("Khong tim thay anh - cookie het han?")
-            return
-        await update.message.reply_text(f"Tim thay {len(imgs)} anh")
-        for i in range(0, len(imgs), 10):
-            batch = imgs[i:i+10]
-            media = [InputMediaPhoto(url) for url in batch]
-            if i == 0:
-                media[0].caption = text[:900]
-            await context.bot.send_media_group(
-                chat_id=TARGET_CHAT,
-                media=media,
-                message_thread_id=TARGET_THREAD
-            )
-        await update.message.reply_text("Xong!")
+        imgs = get_imgs(m.group(0))
+        await upd.message.reply_text(f"Tim thay {len(imgs)} anh")
+        for i in range(0,len(imgs),10):
+            batch=[InputMediaPhoto(x) for x in imgs[i:i+10]]
+            batch[0].caption = upd.message.text[:900]
+            await ctx.bot.send_media_group(TARGET_CHAT,batch,message_thread_id=TARGET_THREAD)
     except Exception as e:
-        await update.message.reply_text(f"Loi: {str(e)[:200]}")
-        print(f"ERROR: {e}")
+        await upd.message.reply_text(f"Loi: {e}")
 
-app = Application.builder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("Gui link FB di")))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
-
-if __name__ == "__main__":
-    app.run_polling()
+app=Application.builder().token(BOT_TOKEN).build()
+app.add_handler(CommandHandler("start",lambda u,c:u.message.reply_text("ok")))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,h))
+app.run_polling()
