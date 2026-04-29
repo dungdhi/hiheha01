@@ -16,22 +16,19 @@ def get_fb_images(url):
         "Cookie": FB_COOKIE,
         "Accept-Language": "vi-VN,vi;q=0.9"
     }
-    # dùng mbasic để nhẹ
     mbasic_url = url.replace("www.facebook.com", "mbasic.facebook.com")
-    # với link share/p/ -> chuyển sang dạng xem ảnh
     if "/share/p/" in mbasic_url:
         pid = mbasic_url.split("/share/p/")[1].split("/")[0]
         mbasic_url = f"https://mbasic.facebook.com/story.php?story_fbid={pid}&id=0"
-    
+
     r = requests.get(mbasic_url, headers=headers, timeout=25)
     r.raise_for_status()
-    # tìm tất cả link ảnh scontent
-    imgs = re.findall(r'https://[^"']+scontent[^"']+?\.jpg', r.text)
-    # làm sạch, bỏ trùng
+    pattern = r"https://[^\"'\\s]+scontent[^\"'\\s]+\\.jpg"
+    imgs = re.findall(pattern, r.text)
     clean = []
     seen = set()
     for i in imgs:
-        i = i.replace("&amp;", "&").split("\")[0]
+        i = i.replace("&amp;", "&")
         if "profile" in i or "emoji" in i:
             continue
         if i not in seen:
@@ -54,7 +51,8 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i in range(0, len(imgs), 10):
             batch = imgs[i:i+10]
             media = [InputMediaPhoto(url) for url in batch]
-            media[0].caption = text[:900]
+            if i == 0:
+                media[0].caption = text[:900]
             await context.bot.send_media_group(
                 chat_id=TARGET_CHAT,
                 media=media,
