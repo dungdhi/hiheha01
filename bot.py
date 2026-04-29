@@ -10,16 +10,25 @@ THREAD_ID = int(THREAD) if THREAD and THREAD.isdigit() else None
 FB_COOKIE = os.getenv("FB_COOKIE", "")
 COOKIE_FILE = "/tmp/fb_cookies.txt"
 
-# ghi cookie Netscape 1 lần
-with open(COOKIE_FILE, "w") as f:
-    f.write("# Netscape HTTP Cookie File\n")
-    for part in FB_COOKIE.split(";"):
-        if "=" not in part: continue
-        k,v = part.strip().split("=",1)
-        f.write(f".facebook.com\tTRUE\t/\tTRUE\t2147483647\t{k}\t{v}\n")
+# --- Ghi cookie đúng định dạng (nhận cả chuỗi Network lẫn file Netscape) ---
+def save_cookie():
+    content = FB_COOKIE.strip()
+    with open(COOKIE_FILE, "w", encoding="utf-8") as f:
+        if content.startswith("# Netscape") or "\tTRUE\t" in content:
+            # bạn dán nguyên file từ extension Get cookies.txt
+            f.write(content)
+        else:
+            # bạn dán chuỗi Cookie: c_user=...; xs=...
+            f.write("# Netscape HTTP Cookie File\n")
+            for part in content.split(";"):
+                if "=" not in part:
+                    continue
+                k, v = part.strip().split("=", 1)
+                f.write(f".facebook.com\tTRUE\t/\tTRUE\t2147483647\t{k}\t{v}\n")
+
+save_cookie()
 
 def get_fb_images(url):
-    # facebook-scraper chấp nhận trực tiếp pfbid/share link
     posts = list(fs.get_posts(
         post_urls=[url],
         cookies=COOKIE_FILE,
@@ -29,18 +38,19 @@ def get_fb_images(url):
         return []
     post = posts[0]
     imgs = post.get("images") or []
-    if post.get("image") and post["image"] not in imgs:
+    if post.get("image"):
         imgs = [post["image"]] + imgs
-    # lọc
     clean = []
     for u in imgs:
         if "scontent" in u and "profile" not in u:
             clean.append(u.split("?")[0])
+    # loại trùng, giữ thứ tự
     return list(dict.fromkeys(clean))
 
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     m = re.search(r"https?://\S*facebook\.com/\S+", update.message.text or "")
-    if not m: return
+    if not m:
+        return
     await update.message.reply_text("Dang lay anh...")
     try:
         imgs = get_fb_images(m.group(0))
@@ -53,12 +63,18 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             media = [InputMediaPhoto(u) for u in batch]
             if i == 0:
                 media[0].caption = update.message.text[:900]
-            await context.bot.send_media_group(CHAT_ID, media, message_thread_id=THREAD_ID)
+            await context.bot.send_media_group(
+                CHAT_ID,
+                media,
+                message_thread_id=THREAD_ID
+            )
         await update.message.reply_text("Xong!")
     except Exception as e:
         await update.message.reply_text(f"Loi: {str(e)[:200]}")
 
 app = Application.builder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("Gui link FB")))
+app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Gui link FB")))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
-app.run_polling()
+
+if __name__ == "__main__":
+    app.run_polling()
